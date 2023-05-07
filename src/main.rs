@@ -6,7 +6,7 @@ use log::{debug, info};
 use rustmatica::{util::Vec3, BlockState, Litematic, Region};
 use std::{
     borrow::Cow,
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     env,
     error::Error,
     ops::Add,
@@ -218,7 +218,12 @@ fn replace(input: &str, output: &str) -> Result<(), Box<dyn Error>> {
     debug!("done.");
 
     let mut output_schematic = Litematic::new(
-        Cow::from(output.replace(".litematic", "")),
+        Path::new(output)
+            .file_name()
+            .context("filename required")?
+            .to_string_lossy()
+            .replace(".litematic", "")
+            .into(),
         schematic.description,
         schematic.author,
     );
@@ -232,12 +237,12 @@ fn replace(input: &str, output: &str) -> Result<(), Box<dyn Error>> {
         };
 
         for (pos, blockstate) in region.blocks() {
-            if blockstate.name == "minecraft:waxed_cut_copper_stairs" {
+            if blockstate.name == "minecraft:lime_wool" {
                 output_region.set_block(
                     pos,
                     BlockState {
-                        name: Cow::from("minecraft:cut_copper_stairs"),
-                        properties: blockstate.properties.clone(),
+                        name: Cow::from("minecraft:air"),
+                        properties: None,
                     },
                 );
             }
@@ -484,6 +489,24 @@ impl BlockShape {
             return Self::from_slab_props(&slabtype);
         }
 
+        match block.name.as_ref() {
+            "minecraft:air" => {}
+            "minecraft:campfire" => {}
+            "minecraft:fire" => {}
+            "minecraft:iron_trapdoor" => {}
+            "minecraft:lantern" => {}
+            "minecraft:nether_brick_fence" => {}
+            "minecraft:observer" => {}
+            "minecraft:spruce_trapdoor" => {}
+            "minecraft:spruce_wall_sign" => {}
+            "minecraft:torch" => {}
+            "minecraft:water" => {}
+
+            x if x.ends_with("wall") => {}
+            _ => {
+                debug!("Don't know the shape of {}", block.name);
+            }
+        };
         air
     }
 }
@@ -634,13 +657,27 @@ fn can_see(from: &BlockState, dir: &Direction) -> bool {
 //     LookAtResult { can_see, can_move }
 // }
 
-fn optimize_region<'a>(region: &Region<'a>, starting_pos: Vec3) -> Result<Region<'a>> {
+struct Node {
+    pos: Vec3,
+    gen: usize,
+}
+
+fn optimize_region<'a>(
+    region: &Region<'a>,
+    starting_pos: Vec3,
+    rainbow: bool,
+    inside: Option<Vec3>,
+) -> Result<Region<'a>> {
     let mut output_region = region.clone();
 
-    let mut q: VecDeque<(Vec3, usize)> = VecDeque::new();
-    q.push_back((starting_pos, 0));
+    let mut q: VecDeque<Node> = VecDeque::new();
+    q.push_back(Node {
+        pos: starting_pos,
+        gen: 0,
+    });
 
     let mut visited: HashSet<Vec3> = HashSet::new();
+    visited.insert(starting_pos);
 
     let mut reachable_blocks: HashSet<Vec3> = HashSet::new();
 
@@ -653,13 +690,23 @@ fn optimize_region<'a>(region: &Region<'a>, starting_pos: Vec3) -> Result<Region
     //
     // let directions = vec![west, east, down, up, north, south];
 
-    while !q.is_empty() {
-        let (current_pos, gen) = q.pop_front().unwrap();
-        let current_block = region.get_block(current_pos);
+    let mut parents = HashMap::new();
+    let mut light_leaked = false;
+
+    let mut lastgen = 0;
+
+    'bfs: while !q.is_empty() {
+        let Node { pos, gen } = q.pop_front().unwrap();
+        let current_block = region.get_block(pos);
+
+        if gen != lastgen {
+            dbg!(gen);
+            lastgen = gen;
+        }
 
         // for direction in reachable_directions(blockstate) {
         for dir in Direction::all() {
-            let next_pos = current_pos + dir.clone();
+            let next_pos = pos + dir.clone();
             if !region.contains(&next_pos) {
                 continue;
             }
@@ -668,7 +715,7 @@ fn optimize_region<'a>(region: &Region<'a>, starting_pos: Vec3) -> Result<Region
                 continue;
             }
 
-            if next_block.name == "minecraft:air" {
+            if rainbow && next_block.name == "minecraft:air" {
                 let rainbow_block = [
                     "minecraft:red_wool",
                     "minecraft:red_concrete",
@@ -687,11 +734,6 @@ fn optimize_region<'a>(region: &Region<'a>, starting_pos: Vec3) -> Result<Region
                     "minecraft:purple_wool",
                     "minecraft:purple_concrete",
                 ][gen % 16];
-                // dbg!(current_pos);
-                // dbg!(&dir);
-                // dbg!(next_pos);
-                // dbg!(gen);
-                // dbg!(q.len());
                 output_region.set_block(
                     next_pos,
                     BlockState {
@@ -704,11 +746,43 @@ fn optimize_region<'a>(region: &Region<'a>, starting_pos: Vec3) -> Result<Region
             if can_see(current_block, &dir) && next_block.name != "minecraft:air" {
                 reachable_blocks.insert(next_pos);
             }
-            if can_move(current_block, next_block, &dir) {
-                q.push_back((next_pos, gen + 1));
+            if pos == starting_pos || can_move(current_block, next_block, &dir) {
+                q.push_back(Node {
+                    pos: next_pos,
+                    gen: gen + 1,
+                });
+                if let Some(inside) = inside {
+                    parents.insert(next_pos, pos);
+                    if next_pos == inside {
+                        debug!("reached inside from start block");
+                        light_leaked = true;
+                        break 'bfs;
+                    }
+                }
                 visited.insert(next_pos);
             }
         }
+    }
+
+    if light_leaked {
+        let mut current = inside.unwrap();
+        loop {
+            let Some(parent) = parents.get(&current) else {
+                break;
+            };
+            if *parent == current {
+                break;
+            }
+            output_region.set_block(
+                current,
+                BlockState {
+                    name: Cow::from("minecraft:red_wool"),
+                    properties: None,
+                },
+            );
+            current = *parent;
+        }
+        return Ok(output_region);
     }
 
     for (pos, blockstate) in region.blocks() {
@@ -729,7 +803,7 @@ fn optimize_region<'a>(region: &Region<'a>, starting_pos: Vec3) -> Result<Region
         if blockstate.name == "minecraft:air" {
             continue;
         }
-        info!("Replacing {} at {:?} with air", blockstate.name, pos);
+        debug!("Replacing {} at {:?} with air", blockstate.name, pos);
         output_region.set_block(
             pos,
             BlockState {
@@ -768,7 +842,8 @@ fn optimize(input: &str, starting_block_id: &str, output: &str) -> Result<()> {
             bail!("Starting block id {} not found in region {}", starting_block_id, region.name);
         };
 
-        let optimized_region = optimize_region(region, starting_pos)?;
+        let optimized_region =
+            optimize_region(region, starting_pos, false, Some(Vec3::new(7, 1, 7)))?;
         output_schematic.regions.push(optimized_region);
     }
 
