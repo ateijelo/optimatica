@@ -66,20 +66,6 @@ impl Direction {
         }
     }
 
-    // fn from(v: Vec3) -> Result<Self> {
-    //     match (v.x, v.y, v.z) {
-    //         (0, 1, 0) => Ok(Direction::Up),
-    //         (0, -1, 0) => Ok(Direction::Down),
-    //         (0, 0, -1) => Ok(Direction::North),
-    //         (0, 0, 1) => Ok(Direction::South),
-    //         (1, 0, 0) => Ok(Direction::East),
-    //         (-1, 0, 0) => Ok(Direction::West),
-    //         _ => {
-    //             bail!("Can't create a direction from {:?}", v)
-    //         }
-    //     }
-    // }
-
     fn all() -> [Self; 6] {
         [
             Direction::Up,
@@ -91,44 +77,6 @@ impl Direction {
         ]
     }
 }
-
-// const SOLID_BLOCKS: [&str; 35] = [
-//     "minecraft:andesite",
-//     "minecraft:blue_concrete",
-//     "minecraft:bone_block",
-//     "minecraft:calcite",
-//     "minecraft:chiseled_quartz_block",
-//     "minecraft:cobblestone",
-//     "minecraft:copper_block",
-//     "minecraft:deepslate_bricks",
-//     "minecraft:deepslate_tiles",
-//     "minecraft:diorite",
-//     "minecraft:dirt",
-//     "minecraft:glowstone",
-//     "minecraft:gold_block",
-//     "minecraft:lapis_block",
-//     "minecraft:lime_wool",
-//     "minecraft:mushroom_stem",
-//     "minecraft:netherrack",
-//     "minecraft:oak_wood",
-//     "minecraft:ochre_froglight",
-//     "minecraft:polished_andesite",
-//     "minecraft:polished_diorite",
-//     "minecraft:quartz_block",
-//     "minecraft:quartz_bricks",
-//     "minecraft:quartz_pillar",
-//     "minecraft:raw_gold_block",
-//     "minecraft:red_nether_bricks",
-//     "minecraft:sea_lantern",
-//     "minecraft:smooth_quartz",
-//     "minecraft:smooth_stone",
-//     "minecraft:spruce_wood",
-//     "minecraft:stone",
-//     "minecraft:stone",
-//     "minecraft:stone_bricks",
-//     "minecraft:tuff",
-//     "minecraft:yellow_glazed_terracotta",
-// ];
 
 lazy_static! {
     static ref SOLID_BLOCKS: HashSet<Cow<'static, str>> = HashSet::from(
@@ -191,14 +139,6 @@ fn materials(filename: &str) -> Result<(), Box<dyn Error>> {
                 counter[&blockstate.name] += 1;
             }
         }
-        // println!("====== entities =======");
-        // for x in region.entities.iter() {
-        //     dbg!(x);
-        // }
-        // println!("====== tile_entities =======");
-        // for x in region.tile_entities.iter() {
-        //     dbg!(x);
-        // }
     }
 
     println!("====== materials =======");
