@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use counter::Counter;
 use itertools::iproduct;
 use lazy_static::lazy_static;
-use log::{debug, info};
+use log::debug;
 use rustmatica::{util::Vec3, BlockState, Litematic, Region};
 use std::{
     borrow::Cow,
@@ -253,77 +253,6 @@ fn replace(input: &str, output: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// fn reachable_directions(blockstate: &BlockState) -> HashSet<Direction> {
-//     // let solid_blocks = HashSet::from(SOLID_BLOCKS.map(Cow::from));
-//
-//     if SOLID_BLOCKS.contains(&blockstate.name) {
-//         return HashSet::new();
-//     }
-//
-//     // let west = Vec3::new(-1, 0, 0);
-//     // let east = Vec3::new(1, 0, 0);
-//     // let down = Vec3::new(0, -1, 0);
-//     // let up = Vec3::new(0, 1, 0);
-//     // let north = Vec3::new(0, 0, -1);
-//     // let south = Vec3::new(0, 0, 1);
-//     //
-//     // let mut dirs = HashSet::from([west, east, down, up, north, south]);
-//     let mut dirs = HashSet::from(Direction::all());
-//
-//     if blockstate.name.ends_with("_stairs") {
-//         let Some(props) = &blockstate.properties else {
-//             return dirs;
-//         };
-//
-//         let shape = props.get("shape").map_or(String::new(), |c| c.to_string());
-//         let half = props.get("half").map_or(String::new(), |c| c.to_string());
-//         let facing = props.get("facing").map_or(String::new(), |c| c.to_string());
-//
-//         if shape == "straight" {
-//             match facing.as_str() {
-//                 "north" => {
-//                     dirs.remove(&Direction::North);
-//                 }
-//                 "south" => {
-//                     dirs.remove(&Direction::South);
-//                 }
-//                 "east" => {
-//                     dirs.remove(&Direction::East);
-//                 }
-//                 "west" => {
-//                     dirs.remove(&Direction::West);
-//                 }
-//                 _ => {}
-//             };
-//         }
-//         if half == "top" {
-//             dirs.remove(&Direction::Up);
-//         }
-//         if half == "bottom" {
-//             dirs.remove(&Direction::Down);
-//         }
-//     }
-//
-//     if blockstate.name.ends_with("_slab") {
-//         let Some(props) = &blockstate.properties else {
-//             return dirs;
-//         };
-//         let slabtype = props.get("type").map_or(String::new(), |c| c.to_string());
-//
-//         if slabtype == "double" {
-//             return HashSet::new();
-//         }
-//         if slabtype == "top" {
-//             dirs.remove(&Direction::Up);
-//         }
-//         if slabtype == "bottom" {
-//             dirs.remove(&Direction::Down);
-//         }
-//     }
-//
-//     dirs
-// }
-
 // divide a block shape into 8 sub-blocks
 struct BlockShape {
     // [x][y][z]
@@ -507,9 +436,27 @@ impl BlockShape {
                 debug!("Don't know the shape of {}", block.name);
             }
         };
+
         air
     }
 }
+
+//  There's two things we need to determine in our BFS when looking from the
+//  current block (`current`) to an adjacent block in a given direction (`next`):
+//
+//  - can the BFS _see_ `next`? this will be used to determine
+//    if "the light touches the block". E.g. if `current` is a bottom
+//    slab, the BFS will be able to see `next`, regardless of what
+//    block it is; but if `current` is stairs with shape "straight"
+//    then whether `next` is visible depends on where the stairs is
+//    facing, i.e. north, south, etc.
+//
+//  - can the BFS _move_ to `next`? a neighboor block might be
+//    visible, but the BFS won't "move" to it (i.e. it won't be put in the
+//    search queue) because theres no "gap" for the light to pass through;
+//    e.g. `current` is a bottom slab and `next` is a top slab; in this
+//    case, `next` is visible, but it shouldn't be moved to, otherwise
+//    the BFS would "break through the walls".
 
 fn can_move(from: &BlockState, to: &BlockState, dir: &Direction) -> bool {
     let from_shape = BlockShape::from(from);
@@ -544,118 +491,21 @@ fn can_see(from: &BlockState, dir: &Direction) -> bool {
     true
 }
 
-// struct LookAtResult {
-//     can_see: bool,
-//     can_move: bool,
-// }
-
-//  There's two things we need to determine in our BFS when looking from the
-//  current block (`current`) to an adjacent block in a given direction (`next`):
-//
-//  - can the BFS _see_ `next`? this will be used to determine
-//    if "the light touches the block". E.g. if `current` is a bottom
-//    slab, the BFS will be able to see `next`, regardless of what
-//    block it is; but if `current` is stairs with shape "straight"
-//    then whether `next` is visible depends on where the stairs is
-//    facing, i.e. north, south, etc.
-//
-//  - can the BFS _move_ to `next`? a neighboor block might be
-//    visible, but the BFS won't "move" to it (i.e. it won't be put in the
-//    search queue) because theres no "gap" for the light to pass through;
-//    e.g. `current` is a bottom slab and `next` is a top slab; in this
-//    case, `next` is visible, but it shouldn't be moved to, otherwise
-//    the BFS would "break through the walls".
-// fn look(current: Vec3, dir: Direction, region: &Region) -> LookAtResult {
-//     let from_block = region.get_block(current);
-//     let to = current + dir.clone();
-//     let to_block = region.get_block(to);
-//
-//     let can_see = true;
-//     let can_move = true;
-//
-//     let neither = LookAtResult {
-//         can_see: false,
-//         can_move: false,
-//     };
-//
-//     if SOLID_BLOCKS.contains(&from_block.name) {
-//         return neither;
-//     }
-//     // if solid_blocks.contains(&to_block.name) {
-//     //     return LookAtResult {
-//     //         can_see: true,
-//     //         can_move: false,
-//     //     };
-//     // }
-//
-//     // let mut result = true;
-//
-//     if from_block.name.ends_with("_stairs") {
-//         let Some(props) = &from_block.properties else {
-//             return neither;
-//         };
-//
-//         let shape = props.get("shape").map_or(String::new(), |c| c.to_string());
-//         let half = props.get("half").map_or(String::new(), |c| c.to_string());
-//         let facing = props.get("facing").map_or(String::new(), |c| c.to_string());
-//
-//         // if shape is not straight, we can see in all sideways directions,
-//         // but whether we can move depends on `current`'s and `next`'s shapes,
-//         // e.g. and `outer_right` stairs next to a straight stairs that "covers
-//         // the 0.5x0.5 space would block movement.
-//         if shape == "straight" {
-//             match facing.as_str() {
-//                 "north" => {
-//                     if dir == Direction::North {
-//                         return neither;
-//                     }
-//                 }
-//                 "south" => {
-//                     if dir == Direction::South {
-//                         return neither;
-//                     }
-//                 }
-//                 "east" => {
-//                     if dir == Direction::East {
-//                         return neither;
-//                     }
-//                 }
-//                 "west" => {
-//                     if dir == Direction::West {
-//                         return neither;
-//                     }
-//                 }
-//                 _ => {}
-//             };
-//         }
-//         if half == "top" && dir == Direction::Up {
-//             return neither;
-//         }
-//         if half == "bottom" && dir == Direction::Down {
-//             return neither;
-//         }
-//     }
-//
-//     if from_block.name.ends_with("_slab") {
-//         let Some(props) = &from_block.properties else {
-//             return neither;
-//         };
-//         let slabtype = props.get("type").map_or(String::new(), |c| c.to_string());
-//
-//         if slabtype == "double" {
-//             return neither;
-//         }
-//
-//         if slabtype == "top" && dir == Direction::Up {
-//             return neither;
-//         }
-//         if slabtype == "bottom" && dir == Direction::Down {
-//             return neither;
-//         }
-//     }
-//
-//     LookAtResult { can_see, can_move }
-// }
+fn is_just_outside(pos: &Vec3, region: &Region) -> bool {
+    if region.contains(pos) {
+        return false;
+    }
+    if !(region.min_x() - 1..=region.max_x() + 1).contains(&pos.x) {
+        return false;
+    }
+    if !(region.min_y() - 1..=region.max_y() + 1).contains(&pos.y) {
+        return false;
+    }
+    if !(region.min_z() - 1..=region.max_z() + 1).contains(&pos.z) {
+        return false;
+    }
+    true
+}
 
 struct Node {
     pos: Vec3,
@@ -681,39 +531,52 @@ fn optimize_region<'a>(
 
     let mut reachable_blocks: HashSet<Vec3> = HashSet::new();
 
-    // let west = Vec3::new(-1, 0, 0);
-    // let east = Vec3::new(1, 0, 0);
-    // let down = Vec3::new(0, -1, 0);
-    // let up = Vec3::new(0, 1, 0);
-    // let north = Vec3::new(0, 0, -1);
-    // let south = Vec3::new(0, 0, 1);
-    //
-    // let directions = vec![west, east, down, up, north, south];
-
     let mut parents = HashMap::new();
     let mut light_leaked = false;
 
     let mut lastgen = 0;
 
+    let air = BlockState {
+        name: Cow::from("minecraft:air"),
+        properties: None,
+    };
+
     'bfs: while !q.is_empty() {
         let Node { pos, gen } = q.pop_front().unwrap();
-        let current_block = region.get_block(pos);
+        let current_block = if region.contains(&pos) {
+            region.get_block(pos)
+        } else {
+            &air
+        };
 
         if gen != lastgen {
             dbg!(gen);
             lastgen = gen;
         }
 
-        // for direction in reachable_directions(blockstate) {
         for dir in Direction::all() {
             let next_pos = pos + dir.clone();
-            if !region.contains(&next_pos) {
-                continue;
-            }
-            let next_block = region.get_block(next_pos);
+
             if visited.contains(&next_pos) {
                 continue;
             }
+
+            // let's extend the BFS to a 1-block buffer around the region, to attempt to reach
+            // blocks that are only reachable by going outside
+            if is_just_outside(&next_pos, region) {
+                q.push_back(Node {
+                    pos: next_pos,
+                    gen: gen + 1,
+                });
+                visited.insert(next_pos);
+                continue;
+            }
+
+            if !region.contains(&next_pos) {
+                continue;
+            }
+
+            let next_block = region.get_block(next_pos);
 
             if rainbow && next_block.name == "minecraft:air" {
                 let rainbow_block = [
@@ -786,17 +649,6 @@ fn optimize_region<'a>(
     }
 
     for (pos, blockstate) in region.blocks() {
-        // blocks on the very edge of the region will be considered reachable
-        // (not quite sure about this, though)
-        if pos.x == region.max_x()
-            || pos.x == region.min_x()
-            || pos.y == region.max_y()
-            || pos.y == region.min_y()
-            || pos.z == region.max_z()
-            || pos.z == region.min_z()
-        {
-            continue;
-        }
         if reachable_blocks.contains(&pos) {
             continue;
         }
@@ -804,13 +656,7 @@ fn optimize_region<'a>(
             continue;
         }
         debug!("Replacing {} at {:?} with air", blockstate.name, pos);
-        output_region.set_block(
-            pos,
-            BlockState {
-                name: Cow::from("minecraft:air"),
-                properties: None,
-            },
-        );
+        output_region.set_block(pos, air.clone());
     }
     Ok(output_region)
 }
@@ -843,7 +689,8 @@ fn optimize(input: &str, starting_block_id: &str, output: &str) -> Result<()> {
         };
 
         let optimized_region =
-            optimize_region(region, starting_pos, false, Some(Vec3::new(7, 1, 7)))?;
+            // optimize_region(region, starting_pos, false, Some(Vec3::new(7, 1, 7)))?;
+            optimize_region(region, starting_pos, false, None)?;
         output_schematic.regions.push(optimized_region);
     }
 
