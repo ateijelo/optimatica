@@ -1,4 +1,6 @@
 use anyhow::{bail, Context, Result};
+use cached::proc_macro::cached;
+use cached::UnboundCache;
 use counter::Counter;
 use itertools::iproduct;
 use lazy_static::lazy_static;
@@ -13,7 +15,7 @@ use std::{
     path::Path,
 };
 
-#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+#[derive(Hash, PartialEq, Eq, Clone, Debug, Copy)]
 enum Direction {
     Up,
     Down,
@@ -32,7 +34,7 @@ impl Add<Direction> for Vec3 {
 }
 
 impl Direction {
-    fn to_vec3(&self) -> Vec3 {
+    fn to_vec3(self) -> Vec3 {
         match self {
             Direction::Up => Vec3::new(0, 1, 0),
             Direction::Down => Vec3::new(0, -1, 0),
@@ -194,6 +196,7 @@ fn replace(input: &str, output: &str) -> Result<(), Box<dyn Error>> {
 }
 
 // divide a block shape into 8 sub-blocks
+#[derive(Clone)]
 struct BlockShape {
     // [x][y][z]
     // x: 0 = west, 1 = east
@@ -202,7 +205,7 @@ struct BlockShape {
     corners: [[[bool; 2]; 2]; 2],
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 struct Corner {
     x: usize,
     y: usize,
@@ -215,90 +218,95 @@ impl Corner {
     }
 }
 
-impl BlockShape {
-    fn all_corners() -> Vec<Corner> {
-        iproduct!(0..=1, 0..=1, 0..=1)
-            .map(|(x, y, z)| Corner::new(x, y, z))
-            .collect()
-    }
+#[cached]
+fn all_corners() -> Vec<Corner> {
+    iproduct!(0..=1, 0..=1, 0..=1)
+        .map(|(x, y, z)| Corner::new(x, y, z))
+        .collect()
+}
 
-    fn side(dir: &Direction) -> Vec<Corner> {
-        let all = Self::all_corners();
-        match dir {
-            Direction::Up => all.into_iter().filter(|v| v.y == 1).collect(),
-            Direction::Down => all.into_iter().filter(|v| v.y == 0).collect(),
-            Direction::North => all.into_iter().filter(|v| v.z == 0).collect(),
-            Direction::South => all.into_iter().filter(|v| v.z == 1).collect(),
-            Direction::East => all.into_iter().filter(|v| v.x == 1).collect(),
-            Direction::West => all.into_iter().filter(|v| v.x == 0).collect(),
+#[cached]
+fn side(dir: Direction) -> Vec<Corner> {
+    let all = all_corners();
+    match dir {
+        Direction::Up => all.into_iter().filter(|v| v.y == 1).collect(),
+        Direction::Down => all.into_iter().filter(|v| v.y == 0).collect(),
+        Direction::North => all.into_iter().filter(|v| v.z == 0).collect(),
+        Direction::South => all.into_iter().filter(|v| v.z == 1).collect(),
+        Direction::East => all.into_iter().filter(|v| v.x == 1).collect(),
+        Direction::West => all.into_iter().filter(|v| v.x == 0).collect(),
+    }
+}
+
+#[cached]
+fn edge(a: Direction, b: Direction) -> Vec<Corner> {
+    let side_b = side(b);
+    side(a).into_iter().filter(|v| side_b.contains(v)).collect()
+}
+
+#[cached(
+    type = "UnboundCache<String,BlockShape>",
+    create = "{ UnboundCache::new() }",
+    convert = r#"{ format!("{}:{}:{}", shape, half, facing) }"#
+)]
+fn from_stairs_props(shape: &str, half: &str, facing: &str) -> BlockShape {
+    let mut blockshape = BlockShape {
+        corners: [[[false; 2]; 2]; 2],
+    };
+
+    if half == "top" {
+        for c in side(Direction::Up) {
+            blockshape.corners[c.x][c.y][c.z] = true;
         }
     }
-
-    fn edge(a: &Direction, b: &Direction) -> Vec<Corner> {
-        let side_b = Self::side(b);
-        Self::side(a)
-            .into_iter()
-            .filter(|v| side_b.contains(v))
-            .collect()
+    if half == "bottom" {
+        for c in side(Direction::Down) {
+            blockshape.corners[c.x][c.y][c.z] = true;
+        }
     }
-
-    fn from_stairs_props(shape: &str, half: &str, facing: &str) -> Self {
-        let mut blockshape = Self {
-            corners: [[[false; 2]; 2]; 2],
+    if shape == "straight" {
+        for c in side(Direction::from_name(facing).unwrap()) {
+            blockshape.corners[c.x][c.y][c.z] = true;
+        }
+    }
+    if shape.starts_with("outer_") || shape.starts_with("inner_") {
+        let side_a = Direction::from_name(facing).unwrap();
+        let (mode, rot) = shape.split_once('_').unwrap();
+        let side_b = match (facing, rot) {
+            ("north", "right") => Direction::East,
+            ("north", "left") => Direction::West,
+            ("east", "right") => Direction::South,
+            ("east", "left") => Direction::North,
+            ("south", "right") => Direction::West,
+            ("south", "left") => Direction::East,
+            ("west", "right") => Direction::North,
+            ("west", "left") => Direction::South,
+            _ => {
+                panic!(
+                    "Unexpected properties in stairs block facing={} shape={}",
+                    facing, shape
+                )
+            }
         };
-
-        if half == "top" {
-            for c in Self::side(&Direction::Up) {
+        if mode == "outer" {
+            for c in edge(side_a, side_b) {
                 blockshape.corners[c.x][c.y][c.z] = true;
             }
         }
-        if half == "bottom" {
-            for c in Self::side(&Direction::Down) {
+        if mode == "inner" {
+            for c in side(side_a) {
+                blockshape.corners[c.x][c.y][c.z] = true;
+            }
+            for c in side(side_b) {
                 blockshape.corners[c.x][c.y][c.z] = true;
             }
         }
-        if shape == "straight" {
-            for c in Self::side(&Direction::from_name(facing).unwrap()) {
-                blockshape.corners[c.x][c.y][c.z] = true;
-            }
-        }
-        if shape.starts_with("outer_") || shape.starts_with("inner_") {
-            let side_a = Direction::from_name(facing).unwrap();
-            let (mode, rot) = shape.split_once('_').unwrap();
-            let side_b = match (facing, rot) {
-                ("north", "right") => Direction::East,
-                ("north", "left") => Direction::West,
-                ("east", "right") => Direction::South,
-                ("east", "left") => Direction::North,
-                ("south", "right") => Direction::West,
-                ("south", "left") => Direction::East,
-                ("west", "right") => Direction::North,
-                ("west", "left") => Direction::South,
-                _ => {
-                    panic!(
-                        "Unexpected properties in stairs block facing={} shape={}",
-                        facing, shape
-                    )
-                }
-            };
-            if mode == "outer" {
-                for c in Self::edge(&side_a, &side_b) {
-                    blockshape.corners[c.x][c.y][c.z] = true;
-                }
-            }
-            if mode == "inner" {
-                for c in Self::side(&side_a) {
-                    blockshape.corners[c.x][c.y][c.z] = true;
-                }
-                for c in Self::side(&side_b) {
-                    blockshape.corners[c.x][c.y][c.z] = true;
-                }
-            }
-        }
-
-        blockshape
     }
 
+    blockshape
+}
+
+impl BlockShape {
     fn solid() -> Self {
         Self {
             corners: [[[true; 2]; 2]; 2],
@@ -314,12 +322,12 @@ impl BlockShape {
             return Self::solid();
         }
         if slabtype == "top" {
-            for c in Self::side(&Direction::Up) {
+            for c in side(Direction::Up) {
                 blockshape.corners[c.x][c.y][c.z] = true;
             }
         }
         if slabtype == "bottom" {
-            for c in Self::side(&Direction::Down) {
+            for c in side(Direction::Down) {
                 blockshape.corners[c.x][c.y][c.z] = true;
             }
         }
@@ -345,7 +353,7 @@ impl BlockShape {
             let half = props.get("half").map_or(String::new(), |c| c.to_string());
             let facing = props.get("facing").map_or(String::new(), |c| c.to_string());
 
-            return Self::from_stairs_props(&shape, &half, &facing);
+            return from_stairs_props(&shape, &half, &facing);
         }
 
         if block.name.ends_with("_slab") {
@@ -358,24 +366,24 @@ impl BlockShape {
             return Self::from_slab_props(&slabtype);
         }
 
-        match block.name.as_ref() {
-            "minecraft:air" => {}
-            "minecraft:campfire" => {}
-            "minecraft:fire" => {}
-            "minecraft:iron_trapdoor" => {}
-            "minecraft:lantern" => {}
-            "minecraft:nether_brick_fence" => {}
-            "minecraft:observer" => {}
-            "minecraft:spruce_trapdoor" => {}
-            "minecraft:spruce_wall_sign" => {}
-            "minecraft:torch" => {}
-            "minecraft:water" => {}
-
-            x if x.ends_with("wall") => {}
-            _ => {
-                debug!("Don't know the shape of {}", block.name);
-            }
-        };
+        // match block.name.as_ref() {
+        //     "minecraft:air" => {}
+        //     "minecraft:campfire" => {}
+        //     "minecraft:fire" => {}
+        //     "minecraft:iron_trapdoor" => {}
+        //     "minecraft:lantern" => {}
+        //     "minecraft:nether_brick_fence" => {}
+        //     "minecraft:observer" => {}
+        //     "minecraft:spruce_trapdoor" => {}
+        //     "minecraft:spruce_wall_sign" => {}
+        //     "minecraft:torch" => {}
+        //     "minecraft:water" => {}
+        //
+        //     x if x.ends_with("wall") => {}
+        //     _ => {
+        //         debug!("Don't know the shape of {}", block.name);
+        //     }
+        // };
 
         air
     }
@@ -402,11 +410,11 @@ fn can_move(from: &BlockState, to: &BlockState, dir: &Direction) -> bool {
     let from_shape = BlockShape::from(from);
     let to_shape = BlockShape::from(to);
 
-    let from_bits = BlockShape::side(dir)
+    let from_bits = side(*dir)
         .into_iter()
         .map(|c| from_shape.corners[c.x][c.y][c.z]);
 
-    let to_bits = BlockShape::side(&dir.opposite())
+    let to_bits = side(dir.opposite())
         .into_iter()
         .map(|c| to_shape.corners[c.x][c.y][c.z]);
 
@@ -420,7 +428,7 @@ fn can_move(from: &BlockState, to: &BlockState, dir: &Direction) -> bool {
 fn can_see(from: &BlockState, dir: &Direction) -> bool {
     let from_shape = BlockShape::from(from);
 
-    if BlockShape::side(dir)
+    if side(*dir)
         .into_iter()
         .map(|c| from_shape.corners[c.x][c.y][c.z])
         .all(|x| x)
@@ -452,6 +460,78 @@ struct Node {
     gen: usize,
 }
 
+struct PositionTracker<'a> {
+    positions: Vec<bool>,
+    // x: RangeInclusive<i32>,
+    // y: RangeInclusive<i32>,
+    // z: RangeInclusive<i32>,
+    region: Region<'a>,
+}
+
+impl<'a> PositionTracker<'a> {
+    fn new(region: &'a Region<'a>) -> Self {
+        // let xr = region.x_range();
+        // let yr = region.y_range();
+        // let zr = region.z_range();
+
+        let r = Region::new(
+            Cow::from(""),
+            Vec3::new(region.min_x() - 1, region.min_y() - 1, region.min_z() - 1),
+            Vec3::new(region.max_x() + 1, region.max_y() + 1, region.max_z() + 1),
+        );
+
+        dbg!(region.min_x(), region.max_x());
+        dbg!(r.x_range(), r.min_x(), r.max_x());
+        dbg!(r.y_range());
+        dbg!(r.z_range());
+        let sx = (r.max_x() - r.min_x() + 1) as usize;
+        let sy = (r.max_y() - r.min_y() + 1) as usize;
+        let sz = (r.max_z() - r.min_z() + 1) as usize;
+        let volume = sx * sy * sz;
+
+        dbg!(sx);
+        dbg!(sy);
+        dbg!(sz);
+        dbg!(volume);
+        let positions = vec![false; volume];
+        Self {
+            positions,
+            region: r,
+        }
+    }
+
+    fn pos_to_index(&self, pos: &Vec3) -> usize {
+        let sx = (self.region.max_x() - self.region.min_x() + 1) as usize;
+        let sz = (self.region.max_z() - self.region.min_z() + 1) as usize;
+        let ax = (pos.x - self.region.min_x()) as usize;
+        let ay = (pos.y - self.region.min_y()) as usize;
+        let az = (pos.z - self.region.min_z()) as usize;
+        ax + az * sx + ay * sz * sx
+    }
+
+    fn insert(&mut self, pos: &Vec3) {
+        let idx = self.pos_to_index(pos);
+        if idx >= self.positions.len() {
+            dbg!("out of bound", pos);
+            dbg!(idx);
+            panic!();
+        }
+        self.positions[idx] = true;
+    }
+
+    fn contains(&self, pos: &Vec3) -> bool {
+        let idx = self.pos_to_index(pos);
+        if idx >= self.positions.len() {
+            return false;
+            // dbg!("out of bound", pos);
+            // dbg!(self.positions.len());
+            // dbg!(idx);
+            // panic!();
+        }
+        self.positions[idx]
+    }
+}
+
 fn optimize_region<'a>(
     region: &Region<'a>,
     starting_pos: Vec3,
@@ -466,10 +546,12 @@ fn optimize_region<'a>(
         gen: 0,
     });
 
-    let mut visited: HashSet<Vec3> = HashSet::new();
-    visited.insert(starting_pos);
+    // let mut visited: HashSet<Vec3> = HashSet::new();
+    let mut visited = PositionTracker::new(region);
+    visited.insert(&starting_pos);
 
-    let mut reachable_blocks: HashSet<Vec3> = HashSet::new();
+    // let mut reachable_blocks: HashSet<Vec3> = HashSet::new();
+    let mut reachable_blocks = PositionTracker::new(region);
 
     let mut parents = HashMap::new();
     let mut light_leaked = false;
@@ -495,7 +577,7 @@ fn optimize_region<'a>(
         }
 
         for dir in Direction::all() {
-            let next_pos = pos + dir.clone();
+            let next_pos = pos + dir;
 
             if visited.contains(&next_pos) {
                 continue;
@@ -508,7 +590,7 @@ fn optimize_region<'a>(
                     pos: next_pos,
                     gen: gen + 1,
                 });
-                visited.insert(next_pos);
+                visited.insert(&next_pos);
                 continue;
             }
 
@@ -547,7 +629,7 @@ fn optimize_region<'a>(
             }
 
             if can_see(current_block, &dir) && next_block.name != "minecraft:air" {
-                reachable_blocks.insert(next_pos);
+                reachable_blocks.insert(&next_pos);
             }
             if pos == starting_pos || can_move(current_block, next_block, &dir) {
                 q.push_back(Node {
@@ -562,7 +644,7 @@ fn optimize_region<'a>(
                         break 'bfs;
                     }
                 }
-                visited.insert(next_pos);
+                visited.insert(&next_pos);
             }
         }
     }
