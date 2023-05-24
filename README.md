@@ -12,7 +12,7 @@ The optimization process goes as follow:
 
  - Add one block to your build that's "outside", i.e. in the area of the build
    that the players would normally be. Pick something that your build doesn't
-   use, e.g. `minecraft:blue`
+   use, e.g. `minecraft:blue_wool`
 
  - Run the optimizer and tell it what block you used.
 
