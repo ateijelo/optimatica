@@ -41,3 +41,7 @@ the starting block, try these options:
   Optimatica will stop the flood fill if it finds the "inside" block and it
   will build the path to it from the starting block. See where that path
   crosses your walls, patch your build, and try optimizing again.
+
+# Jenkins
+
+a dummy change to test the jenkins integration
